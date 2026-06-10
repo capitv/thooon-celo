@@ -13,5 +13,5 @@ evm_version = "paris"
 celo = "https://forno.celo.org"
 celo_sepolia = "https://forno.celo-sepolia.celo-testnet.org"
 
-[etherscan]
-celo = { key = "${CELOSCAN_API_KEY}", url = "https://api.celoscan.io/api", chain = 42220 }
+# Verificação padrão: Sourcify (sem API key). Para Celoscan, passe
+# --etherscan-api-key e --verifier-url https://api.celoscan.io/api na CLI.

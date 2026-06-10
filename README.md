@@ -16,7 +16,9 @@ Immutable, ownerless, zero-dependency contract:
 
 | Network | Chain ID | Address |
 |---|---|---|
-| Celo Mainnet | 42220 | _TBD — fill after deploy_ |
+| Celo Mainnet | 42220 | [`0xC1f51A310170A8f2a5D641db876f6239868D244f`](https://celoscan.io/address/0xC1f51A310170A8f2a5D641db876f6239868D244f) |
+
+Verified on [Sourcify](https://repo.sourcify.dev/contracts/full_match/42220/0xC1f51A310170A8f2a5D641db876f6239868D244f/) (exact match).
 
 ### ABI (human-readable)
 
@@ -55,8 +57,8 @@ forge verify-contract <ADDRESS> src/ThooonCheckIn.sol:ThooonCheckIn --chain 4222
 
 ## Launch checklist (Proof of Ship)
 
-- [ ] Deploy `ThooonCheckIn` to Celo Mainnet; record address above
-- [ ] Verify contract (Sourcify or Celoscan)
+- [x] Deploy `ThooonCheckIn` to Celo Mainnet; record address above
+- [x] Verify contract (Sourcify exact match)
 - [ ] Set Vercel env: `NEXT_PUBLIC_CELO_CHECKIN_CONTRACT_ADDRESS`, `FEATURE_CELO_CHECKIN=true`, `NEXT_PUBLIC_FEATURE_CELO_CHECKIN=true`, `NEXT_PUBLIC_FEATURE_MINIPAY=true`
 - [ ] Apply the `celo_checkin` Supabase migration
 - [ ] Register builder profile + project on [talent.app](https://talent.app/~/earn/celo-proof-of-ship) (public repo URL, contract address, live URL `https://thooon.com/mini`, path to the `isMiniPay` hook in Data Sources)
