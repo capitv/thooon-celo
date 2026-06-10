@@ -60,7 +60,7 @@ contract ThooonCheckInTest is Test {
 
         vm.warp(block.timestamp + 1 days);
         vm.expectEmit(true, true, false, true);
-        emit CheckIn(alice, bytes32(uint256(3)), _day() + 1, 3);
+        emit CheckIn(alice, bytes32(uint256(3)), _day(), 3);
         vm.prank(alice);
         checkIn.checkIn(bytes32(uint256(3)));
 
