@@ -2,7 +2,7 @@
 
 On-chain layer for [Thooon](https://thooon.com) on **Celo** — built for the [Celo Proof of Ship](https://celoplatform.notion.site/Proof-of-Ship-17cd5cb803de8060ba10d22a72b549f8) program.
 
-Thooon is a free-to-play creature game (battles, expeditions, crafting) live at [thooon.com](https://thooon.com). This repo contains the Celo Mainnet smart contract that powers the in-game **daily on-chain check-in**: players inside [MiniPay](https://www.minipay.to/) check in once per day, paying the network fee in stablecoins (USDm via fee abstraction), and earn in-game gold and streak bonuses.
+Thooon is a free-to-play creature game (battles, expeditions, crafting). **Play it on MiniPay: [dsv.thooon.com/mini](https://dsv.thooon.com/mini)**. This repo contains the Celo Mainnet smart contract that powers the in-game **daily on-chain check-in**: players inside [MiniPay](https://www.minipay.to/) check in once per day, paying the network fee in stablecoins (USDm via fee abstraction), and earn in-game gold and streak bonuses.
 
 ## ThooonCheckIn.sol
 
@@ -61,6 +61,6 @@ forge verify-contract <ADDRESS> src/ThooonCheckIn.sol:ThooonCheckIn --chain 4222
 - [x] Verify contract (Sourcify exact match)
 - [ ] Set Vercel env: `NEXT_PUBLIC_CELO_CHECKIN_CONTRACT_ADDRESS`, `FEATURE_CELO_CHECKIN=true`, `NEXT_PUBLIC_FEATURE_CELO_CHECKIN=true`, `NEXT_PUBLIC_FEATURE_MINIPAY=true`
 - [ ] Apply the `celo_checkin` Supabase migration
-- [ ] Register builder profile + project on [talent.app](https://talent.app/~/earn/celo-proof-of-ship) (public repo URL, contract address, live URL `https://thooon.com/mini`, path to the `isMiniPay` hook in Data Sources)
+- [ ] Register builder profile + project on [talent.app](https://talent.app/~/earn/celo-proof-of-ship) (public repo URL, contract address, live URL `https://dsv.thooon.com/mini`, path to the `isMiniPay` hook in Data Sources)
 - [ ] Join [t.me/proofofship](https://t.me/proofofship) + weekly Office Hours
 - [ ] After stable on device: MiniPay Stage 1 intake at [minipay.to/mini-apps](https://minipay.to/mini-apps)
