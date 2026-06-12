@@ -2,7 +2,7 @@
 
 On-chain layer for [Thooon](https://thooon.com) on **Celo** — built for the [Celo Proof of Ship](https://celoplatform.notion.site/Proof-of-Ship-17cd5cb803de8060ba10d22a72b549f8) program.
 
-Thooon is a free-to-play creature game (battles, expeditions, crafting). **Play it on MiniPay: [dsv.thooon.com/mini](https://dsv.thooon.com/mini)**. This repo contains the Celo Mainnet smart contract that powers the in-game **daily on-chain check-in**: players inside [MiniPay](https://www.minipay.to/) check in once per day, paying the network fee in stablecoins (USDm via fee abstraction), and earn in-game gold and streak bonuses.
+Thooon is a free-to-play creature game (battles, expeditions, crafting). **Play it on MiniPay: [dsv.thooon.com/mini](https://dsv.thooon.com/mini)**. This repo contains the Celo Mainnet smart contract that powers the in-game **daily on-chain check-in** — players inside [MiniPay](https://www.minipay.to/) check in once per day, paying the network fee in stablecoins (USDm via fee abstraction), and earn in-game gold and streak bonuses — plus a [mirror of the full game-side integration](frontend-integration/) (MiniPay detection, EIP-712 sign-in, check-in API, UI). The game itself is a private Next.js 14 codebase; all Celo-facing code is mirrored here.
 
 ## ThooonCheckIn.sol
 
