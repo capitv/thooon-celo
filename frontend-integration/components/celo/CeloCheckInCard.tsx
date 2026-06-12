@@ -38,21 +38,22 @@ function makeConfetti(count: number) {
  */
 const SIMULATED_KEY_PREFIX = "celo-checkin:simulated:";
 
-function utcDayKey(): string {
-  return `${SIMULATED_KEY_PREFIX}${new Date().toISOString().slice(0, 10)}`;
+// Escopado por wallet: outra conta no mesmo device não herda o check-in
+function utcDayKey(address: string): string {
+  return `${SIMULATED_KEY_PREFIX}${address.toLowerCase()}:${new Date().toISOString().slice(0, 10)}`;
 }
 
-function hasSimulatedCheckInToday(): boolean {
+function hasSimulatedCheckInToday(address: string): boolean {
   try {
-    return localStorage.getItem(utcDayKey()) === "1";
+    return localStorage.getItem(utcDayKey(address)) === "1";
   } catch {
     return false;
   }
 }
 
-function markSimulatedCheckInToday(): void {
+function markSimulatedCheckInToday(address: string): void {
   try {
-    localStorage.setItem(utcDayKey(), "1");
+    localStorage.setItem(utcDayKey(address), "1");
   } catch {
     // localStorage bloqueado — só não persiste entre reloads
   }
@@ -83,7 +84,7 @@ export default function CeloCheckInCard() {
   const accessToken = session?.access_token ?? null;
 
   useEffect(() => {
-    if (!isMiniPay || !isAuthenticated || !accessToken) return;
+    if (!isMiniPay || !isAuthenticated || !accessToken || !address) return;
     let cancelled = false;
     fetchWithAuthRetry("/api/celo/check-in/status", { method: "GET" }, accessToken)
       .then(async (res) => {
@@ -93,7 +94,7 @@ export default function CeloCheckInCard() {
       .then((data) => {
         if (cancelled || !data?.enabled) return;
         // Check-in simulado de hoje sobrepõe o status do servidor
-        if (!data.checkedInToday && hasSimulatedCheckInToday()) {
+        if (!data.checkedInToday && hasSimulatedCheckInToday(address)) {
           setStatus({ ...data, checkedInToday: true });
         } else {
           setStatus(data);
@@ -103,7 +104,7 @@ export default function CeloCheckInCard() {
     return () => {
       cancelled = true;
     };
-  }, [isMiniPay, isAuthenticated, accessToken]);
+  }, [isMiniPay, isAuthenticated, accessToken, address]);
 
   const celebrate = useCallback(() => {
     setCelebrating(true);
@@ -120,7 +121,7 @@ export default function CeloCheckInCard() {
     if (error) {
       if (/cancelled|denied|rejected/i.test(error.message)) {
         // Tx negada pelo MiniPay (-32604) ou cancelada — fallback simulado
-        markSimulatedCheckInToday();
+        markSimulatedCheckInToday(address);
         setStatus((prev) => (prev ? { ...prev, checkedInToday: true } : prev));
         setMessage("✓ Checked in!");
         celebrate();
