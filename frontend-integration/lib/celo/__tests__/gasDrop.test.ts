@@ -2,14 +2,18 @@
  * Testes da lib server do gas drop — thirdweb mockado por completo.
  */
 
+// Sem imports estáticos (só jest.mock + import() dinâmico), então o export
+// vazio força modo módulo — senão as consts colidem com outros testes.
+export {};
+
 const HOT_WALLET = "0x9999000000000000000000000000000000000009";
 const RECIPIENT = "0xabcd000000000000000000000000000000000001";
 const TX_HASH =
   "0xcccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
 
-const mockGetBalance = jest.fn();
-const mockSendTransaction = jest.fn();
-const mockPrepareTransaction = jest.fn((tx: unknown) => tx);
+const mockGetBalance: jest.Mock = jest.fn();
+const mockSendTransaction: jest.Mock = jest.fn();
+const mockPrepareTransaction: jest.Mock = jest.fn((tx: unknown) => tx);
 
 jest.mock("server-only", () => ({}));
 
