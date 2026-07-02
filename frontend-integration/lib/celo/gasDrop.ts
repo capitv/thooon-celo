@@ -24,8 +24,9 @@ import {
 
 const HOT_WALLET_ENV = "CELO_GAS_DROP_PRIVATE_KEY";
 
-/** Margem de gas da própria tx de drop ao checar o saldo da hot wallet. */
-const HOT_WALLET_GAS_MARGIN_WEI = 1_000_000_000_000_000n; // 0.001 CELO
+/** Margem de gas da própria tx de drop ao checar o saldo da hot wallet
+ *  (21k gas a ~400 gwei ≈ 0.0084 CELO; 0.02 dá folga 2x). */
+const HOT_WALLET_GAS_MARGIN_WEI = 20_000_000_000_000_000n; // 0.02 CELO
 
 export function isGasDropConfigured(): boolean {
   return (

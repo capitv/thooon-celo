@@ -75,14 +75,14 @@ describe("gasDrop (server lib)", () => {
   });
 
   describe("recipientHasEnoughGas", () => {
-    it("true no threshold exato (0.005 CELO)", async () => {
-      mockGetBalance.mockResolvedValue(5_000_000_000_000_000n);
+    it("true no threshold exato (0.02 CELO)", async () => {
+      mockGetBalance.mockResolvedValue(20_000_000_000_000_000n);
       const { recipientHasEnoughGas } = await loadModule();
       expect(await recipientHasEnoughGas(RECIPIENT)).toBe(true);
     });
 
     it("false abaixo do threshold", async () => {
-      mockGetBalance.mockResolvedValue(4_999_999_999_999_999n);
+      mockGetBalance.mockResolvedValue(19_999_999_999_999_999n);
       const { recipientHasEnoughGas } = await loadModule();
       expect(await recipientHasEnoughGas(RECIPIENT)).toBe(false);
     });
@@ -90,21 +90,21 @@ describe("gasDrop (server lib)", () => {
 
   describe("hotWalletCanFund", () => {
     it("false quando o float não cobre drop + margem de gas", async () => {
-      // 0.02 (drop) + 0.001 (margem) = 0.021 exigido
-      mockGetBalance.mockResolvedValue(20_999_999_999_999_999n);
+      // 0.2 (drop) + 0.02 (margem) = 0.22 exigido
+      mockGetBalance.mockResolvedValue(219_999_999_999_999_999n);
       const { hotWalletCanFund, getGasDropAccount } = await loadModule();
       expect(await hotWalletCanFund(getGasDropAccount()!)).toBe(false);
     });
 
     it("true quando cobre", async () => {
-      mockGetBalance.mockResolvedValue(21_000_000_000_000_000n);
+      mockGetBalance.mockResolvedValue(220_000_000_000_000_000n);
       const { hotWalletCanFund, getGasDropAccount } = await loadModule();
       expect(await hotWalletCanFund(getGasDropAccount()!)).toBe(true);
     });
   });
 
   describe("sendGasDrop", () => {
-    it("prepara tx de 0.02 CELO para o destinatário e devolve o hash", async () => {
+    it("prepara tx de 0.2 CELO para o destinatário e devolve o hash", async () => {
       mockSendTransaction.mockResolvedValue({ transactionHash: TX_HASH });
       const { sendGasDrop, getGasDropAccount } = await loadModule();
 
@@ -114,7 +114,7 @@ describe("gasDrop (server lib)", () => {
       expect(mockPrepareTransaction).toHaveBeenCalledWith(
         expect.objectContaining({
           to: RECIPIENT,
-          value: 20_000_000_000_000_000n,
+          value: 200_000_000_000_000_000n,
         })
       );
       expect(mockSendTransaction).toHaveBeenCalledWith(

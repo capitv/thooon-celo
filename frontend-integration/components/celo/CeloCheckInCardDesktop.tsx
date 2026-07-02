@@ -5,9 +5,8 @@ import {
   useActiveAccount,
   useAutoConnect,
   useConnectModal,
-  useSendTransaction,
+  useSwitchActiveWalletChain,
 } from "thirdweb/react";
-import { getContract, prepareContractCall } from "thirdweb";
 import { getRpcClient, eth_getBalance } from "thirdweb/rpc";
 import { createWallet } from "thirdweb/wallets";
 import { useAuth } from "@/components/providers/AuthProvider";
@@ -104,7 +103,7 @@ type CardMode = "connect" | "mismatch" | "getGas" | "checkIn" | "resume";
 export default function CeloCheckInCardDesktop() {
   const account = useActiveAccount();
   const { connect } = useConnectModal();
-  const { mutateAsync: sendTransaction } = useSendTransaction();
+  const switchChain = useSwitchActiveWalletChain();
   const { isAuthenticated, session } = useAuth();
   // Reconecta sozinho a wallet usada na última sessão — quem já vinculou
   // não vê modal nenhum, o card já abre pronto pra check-in.
@@ -211,23 +210,32 @@ export default function CeloCheckInCardDesktop() {
     [celebrate]
   );
 
-  /** Envia checkIn(nonce) pela wallet thirdweb; o hook troca a chain sozinho. */
+  /**
+   * Envia checkIn(nonce) CRU pela conta ativa: só to+data+chainId, SEM
+   * campos de fee — a wallet estima sozinha. O helper sendTransaction do
+   * thirdweb populava gasPrice via eth_gasPrice×2 e pagou 402 gwei numa
+   * fee justa de ~200 (medido em produção: 0.0276 CELO, aviso "high site
+   * fee" no MetaMask). Calldata montada na mão (selector + nonce padded,
+   * mesmo padrão do lib/minipay.ts) pra dispensar ABI no bundle.
+   */
   const sendViaThirdweb = useCallback(
     async (challenge: CheckInChallenge): Promise<`0x${string}`> => {
-      const contract = getContract({
-        client: thirdwebClient,
-        chain: celo,
-        address: challenge.contractAddress,
+      if (!account) throw new Error("No connected wallet account");
+      // Chain certa ANTES do envio — account.sendTransaction usa a chain
+      // corrente da wallet; recusa do usuário aborta aqui, sem tx errada.
+      await switchChain(celo);
+
+      // checkIn(bytes32) — `cast sig "checkIn(bytes32)"` = 0x4662d1dd
+      const CHECKIN_SELECTOR = "0x4662d1dd";
+      const noncePadded = challenge.nonce.replace(/^0x/, "").padStart(64, "0");
+      const result = await account.sendTransaction({
+        to: challenge.contractAddress as `0x${string}`,
+        data: `${CHECKIN_SELECTOR}${noncePadded}` as `0x${string}`,
+        chainId: 42220,
       });
-      const call = prepareContractCall({
-        contract,
-        method: "function checkIn(bytes32 nonce)",
-        params: [challenge.nonce],
-      });
-      const receipt = await sendTransaction(call);
-      return receipt.transactionHash;
+      return result.transactionHash;
     },
-    [sendTransaction]
+    [account, switchChain]
   );
 
   const handleConnect = useCallback(async () => {
