@@ -61,6 +61,7 @@ forge verify-contract <ADDRESS> src/ThooonCheckIn.sol:ThooonCheckIn --chain 4222
 - [x] Verify contract (Sourcify exact match)
 - [ ] Set Vercel env: `NEXT_PUBLIC_CELO_CHECKIN_CONTRACT_ADDRESS`, `FEATURE_CELO_CHECKIN=true`, `NEXT_PUBLIC_FEATURE_CELO_CHECKIN=true`, `NEXT_PUBLIC_FEATURE_MINIPAY=true`
 - [ ] Apply the `celo_checkin` Supabase migration
+- [ ] Desktop check-in (primary player base): port `CeloCheckInCardDesktop` + gas drop from [`frontend-integration/`](frontend-integration/), apply the `celo_gas_drops` migration, fund the gas-drop hot wallet (10–20 CELO) and set `CELO_GAS_DROP_PRIVATE_KEY` + `FEATURE_CELO_GAS_DROP=true`
 - [ ] Register builder profile + project on [talent.app](https://talent.app/~/earn/celo-proof-of-ship) (public repo URL, contract address, live URL `https://dsv.thooon.com/mini`, path to the `isMiniPay` hook in Data Sources)
 - [ ] Join [t.me/proofofship](https://t.me/proofofship) + weekly Office Hours
 - [ ] After stable on device: MiniPay Stage 1 intake at [minipay.to/mini-apps](https://minipay.to/mini-apps)
