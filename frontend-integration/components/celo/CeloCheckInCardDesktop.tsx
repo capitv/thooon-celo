@@ -3,11 +3,13 @@
 import { useCallback, useEffect, useState } from "react";
 import {
   useActiveAccount,
+  useAutoConnect,
   useConnectModal,
   useSendTransaction,
 } from "thirdweb/react";
 import { getContract, prepareContractCall } from "thirdweb";
 import { getRpcClient, eth_getBalance } from "thirdweb/rpc";
+import { createWallet } from "thirdweb/wallets";
 import { useAuth } from "@/components/providers/AuthProvider";
 import { fetchWithAuthRetry } from "@/lib/auth/fetchWithAuthRetry";
 import { thirdwebClient } from "@/lib/thirdweb";
@@ -29,6 +31,14 @@ import { GAS_DROP_RECIPIENT_MAX_BALANCE_WEI } from "@/lib/celo/gasDropConfig";
 function shortAddress(addr: string): string {
   return `${addr.slice(0, 6)}…${addr.slice(-4)}`;
 }
+
+// Só wallets de extensão que jogadores desktop realmente têm — sem social/
+// in-app/coleção gigante do modal default (confunde e nenhuma tem CELO).
+// A MESMA lista vai pro useAutoConnect: quem já conectou antes volta ligado.
+const CHECKIN_WALLETS = [
+  createWallet("io.metamask"),
+  createWallet("io.rabby"),
+];
 
 async function fetchCeloBalance(address: string): Promise<bigint> {
   const rpc = getRpcClient({ client: thirdwebClient, chain: celo });
@@ -96,6 +106,9 @@ export default function CeloCheckInCardDesktop() {
   const { connect } = useConnectModal();
   const { mutateAsync: sendTransaction } = useSendTransaction();
   const { isAuthenticated, session } = useAuth();
+  // Reconecta sozinho a wallet usada na última sessão — quem já vinculou
+  // não vê modal nenhum, o card já abre pronto pra check-in.
+  useAutoConnect({ client: thirdwebClient, wallets: CHECKIN_WALLETS });
 
   const [status, setStatus] = useState<CheckInStatusResponse | null>(null);
   // null = desconhecido (carregando ou RPC falhou). Desconhecido NÃO esconde
@@ -219,7 +232,13 @@ export default function CeloCheckInCardDesktop() {
 
   const handleConnect = useCallback(async () => {
     try {
-      await connect({ client: thirdwebClient, chain: celo });
+      await connect({
+        client: thirdwebClient,
+        chain: celo,
+        wallets: CHECKIN_WALLETS,
+        showAllWallets: false,
+        size: "compact",
+      });
     } catch {
       // modal fechado sem conectar — sem erro na UI
     }
@@ -228,13 +247,15 @@ export default function CeloCheckInCardDesktop() {
   const handleGetGas = useCallback(async () => {
     if (busy || !address) return;
     setBusy(true);
-    setMessage(null);
+    // Deixar explícito que o gas é presente NOSSO — o jogador médio não
+    // sabe o que é gas e acharia que vai pagar algo.
+    setMessage("Sending you free gas — hang on...");
     try {
       await requestGasDrop(authedFetch, address);
-      setMessage("Gas on the way...");
       const balance = await waitForGas(address);
-      setHasEnoughGas(balance >= GAS_DROP_RECIPIENT_MAX_BALANCE_WEI);
-      setMessage(null);
+      const funded = balance >= GAS_DROP_RECIPIENT_MAX_BALANCE_WEI;
+      setHasEnoughGas(funded);
+      setMessage(funded ? "Gas received — on us! ✓" : null);
     } catch (error) {
       if (error instanceof GasDropError) {
         if (error.code === "balance_sufficient") {
@@ -244,7 +265,7 @@ export default function CeloCheckInCardDesktop() {
         } else if (error.code === "already_received") {
           // Drop pode ter saído segundos atrás (double-click, timeout do
           // waitForGas anterior) — espera o saldo antes de desistir.
-          setMessage("Gas on the way...");
+          setMessage("Sending you free gas — hang on...");
           const balance = await waitForGas(address).catch(() => 0n);
           const funded = balance >= GAS_DROP_RECIPIENT_MAX_BALANCE_WEI;
           setHasEnoughGas(funded);
@@ -252,7 +273,7 @@ export default function CeloCheckInCardDesktop() {
             setGasDropBlocked(true);
             setMessage(error.message);
           } else {
-            setMessage(null);
+            setMessage("Gas received — on us! ✓");
           }
         } else if (error.code === "not_eligible") {
           setGasDropBlocked(true);
@@ -330,15 +351,20 @@ export default function CeloCheckInCardDesktop() {
           ? "getGas"
           : "checkIn";
 
+  // Sem wallet conectada: aponta a que o jogador já usa no jogo, se houver.
+  const suggestedWallet = status.linkedWallet ?? status.suggestedWallet ?? null;
+
   const subtitle = status.checkedInToday
     ? `✓ Day ${status.currentStreak} complete`
     : mode === "mismatch"
       ? `Connect ${shortAddress(status.linkedWallet!)}`
-      : mode === "resume"
-        ? "Confirming your check-in..."
-        : mode === "getGas"
-          ? "Free gas for your first check-in"
-          : `Streak ${status.currentStreak} → +${status.nextReward} gold`;
+      : mode === "connect" && suggestedWallet
+        ? `Connect your wallet ${shortAddress(suggestedWallet)}`
+        : mode === "resume"
+          ? "Confirming your check-in..."
+          : mode === "getGas"
+            ? "We send the gas — free for you"
+            : `Streak ${status.currentStreak} → +${status.nextReward} gold`;
 
   const primaryButtonClass =
     "shrink-0 rounded-md bg-gradient-to-r from-amber-400 to-amber-500 px-3 py-2 font-pixel text-[10px] uppercase tracking-wider text-black transition-opacity " +
@@ -363,7 +389,7 @@ export default function CeloCheckInCardDesktop() {
         (busy ? "opacity-60 cursor-not-allowed" : "hover:bg-emerald-400/10")
       }
     >
-      {busy ? "..." : "Get gas"}
+      {busy ? "..." : "Get free gas"}
     </button>
   ) : (
     <button

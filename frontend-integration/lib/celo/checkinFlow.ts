@@ -31,6 +31,8 @@ export interface CheckInSuccess {
 export interface CheckInStatusResponse {
   enabled: boolean;
   linkedWallet: string | null;
+  /** Wallet que o jogador já usa no jogo (Celo > thirdweb > staking) — dica de conexão. */
+  suggestedWallet?: string | null;
   checkedInToday: boolean;
   currentStreak: number;
   nextReward: number;

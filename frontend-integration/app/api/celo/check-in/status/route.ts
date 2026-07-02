@@ -63,7 +63,7 @@ export async function GET(req: NextRequest) {
   const [{ data: profile }, { data: lastCheckIn }] = await Promise.all([
     supabaseAdmin
       .from("profiles")
-      .select("celo_wallet_address")
+      .select("celo_wallet_address, thirdweb_wallet_address, wallet_address")
       .eq("id", user.id)
       .maybeSingle(),
     supabaseAdmin
@@ -85,6 +85,14 @@ export async function GET(req: NextRequest) {
   return NextResponse.json({
     enabled: true,
     linkedWallet: profile?.celo_wallet_address ?? null,
+    // Dica de conexão pro card desktop: a wallet que o jogador JÁ usa no
+    // jogo (Celo > thirdweb > staking Berachain). Sugestão, não imposição —
+    // sem vínculo Celo prévio, qualquer wallet passa no challenge/verify.
+    suggestedWallet:
+      profile?.celo_wallet_address ??
+      profile?.thirdweb_wallet_address ??
+      profile?.wallet_address ??
+      null,
     checkedInToday,
     currentStreak,
     nextReward: calcReward(nextStreakDay),
