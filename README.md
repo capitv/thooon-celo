@@ -55,13 +55,33 @@ forge verify-contract <ADDRESS> src/ThooonCheckIn.sol:ThooonCheckIn --chain 4222
   --verifier-url https://api.celoscan.io/api --etherscan-api-key $CELOSCAN_API_KEY
 ```
 
+## Live status (2026-07-02)
+
+The integration is **live in production**. First on-chain check-in: [`0x7e900d…879e`](https://celoscan.io/tx/0x7e900d4e647378bf59a63fc5e47d40b5704e235250208c37e0e018b4bade879e) — verified by the backend, wallet linked, gold credited.
+
+Two client paths share the same challenge → `checkIn(nonce)` → verify backend:
+
+| Path | Wallet | Gas | Status |
+|---|---|---|---|
+| **Desktop browser** (primary — the player base is desktop-first) | MetaMask / Rabby via thirdweb, auto-reconnect | Native CELO; zero-balance wallets get a one-time **0.2 CELO gas drop** from a small-float hot wallet ([`0xE790…D5dD`](https://celoscan.io/address/0xE79038EE70178880b1eaB6C1b94dF2533FEdD5dD)) | ✅ live |
+| **MiniPay** ([dsv.thooon.com/mini](https://dsv.thooon.com/mini)) | Injected MiniPay provider, EIP-712 sign-in | Stablecoin via fee abstraction | Blocked by MiniPay's `-32604` contract-tx restriction for unlisted mini apps; Stage 1 intake pending |
+
+### Fee reality on Celo (measured, not assumed)
+
+The first production check-in cost **0.0276 CELO at 402 gwei**: thirdweb's `sendTransaction` helper doubled the network's `eth_gasPrice` (~200 gwei that day) and tripped MetaMask's *"high site fee"* warning. Two consequences baked into the code:
+
+- The desktop card sends **raw calldata** (`to` + `data` + `chainId` only) so the wallet estimates fees itself — no inflated suggestion, roughly half the cost (~0.014 CELO/check-in).
+- The gas drop is sized to the **measured** ~200 gwei reality (0.2 CELO ≈ two weeks of daily check-ins), not the historical 25 gwei from docs.
+
 ## Launch checklist (Proof of Ship)
 
 - [x] Deploy `ThooonCheckIn` to Celo Mainnet; record address above
 - [x] Verify contract (Sourcify exact match)
-- [ ] Set Vercel env: `NEXT_PUBLIC_CELO_CHECKIN_CONTRACT_ADDRESS`, `FEATURE_CELO_CHECKIN=true`, `NEXT_PUBLIC_FEATURE_CELO_CHECKIN=true`, `NEXT_PUBLIC_FEATURE_MINIPAY=true`
-- [ ] Apply the `celo_checkin` Supabase migration
-- [ ] Desktop check-in (primary player base): port `CeloCheckInCardDesktop` + gas drop from [`frontend-integration/`](frontend-integration/), apply the `celo_gas_drops` migration, fund the gas-drop hot wallet (10–20 CELO) and set `CELO_GAS_DROP_PRIVATE_KEY` + `FEATURE_CELO_GAS_DROP=true`
+- [x] Set Vercel env: `NEXT_PUBLIC_CELO_CHECKIN_CONTRACT_ADDRESS`, `FEATURE_CELO_CHECKIN=true`, `NEXT_PUBLIC_FEATURE_CELO_CHECKIN=true`, `NEXT_PUBLIC_FEATURE_MINIPAY=true`
+- [x] Apply the `celo_checkin` Supabase migration
+- [x] Desktop check-in (primary player base): `CeloCheckInCardDesktop` + gas drop ported from [`frontend-integration/`](frontend-integration/), `celo_gas_drops` migration applied, hot wallet funded (40 CELO), `CELO_GAS_DROP_PRIVATE_KEY` + `FEATURE_CELO_GAS_DROP=true` set
+- [x] First real on-chain check-in verified end-to-end (tx above)
 - [ ] Register builder profile + project on [talent.app](https://talent.app/~/earn/celo-proof-of-ship) (public repo URL, contract address, live URL `https://dsv.thooon.com/mini`, path to the `isMiniPay` hook in Data Sources)
 - [ ] Join [t.me/proofofship](https://t.me/proofofship) + weekly Office Hours
-- [ ] After stable on device: MiniPay Stage 1 intake at [minipay.to/mini-apps](https://minipay.to/mini-apps)
+- [ ] MiniPay Stage 1 intake at [minipay.to/mini-apps](https://minipay.to/mini-apps) — unblocks contract txs inside MiniPay + leaderboard booster
+- [ ] In-game announcement driving players to the daily check-in
