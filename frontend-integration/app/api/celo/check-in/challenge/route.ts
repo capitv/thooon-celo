@@ -90,8 +90,10 @@ export async function POST(req: NextRequest) {
     .maybeSingle();
 
   if (todayCheckIn) {
+    // `code` desambigua do 429 do rate limiter — o client NUNCA deve marcar
+    // checkedInToday a partir do status sozinho.
     return NextResponse.json(
-      { error: "Already checked in today" },
+      { error: "Already checked in today", code: "already_checked_in" },
       { status: 429 }
     );
   }

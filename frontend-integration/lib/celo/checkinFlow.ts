@@ -27,6 +27,22 @@ export interface CheckInSuccess {
   walletLinked: string;
 }
 
+/** Resposta de GET /api/celo/check-in/status — compartilhada pelos dois cards. */
+export interface CheckInStatusResponse {
+  enabled: boolean;
+  linkedWallet: string | null;
+  checkedInToday: boolean;
+  currentStreak: number;
+  nextReward: number;
+  contractAddress?: string | null;
+}
+
+/** Tx broadcastada aguardando confirmação — retomável (nonce vive 30 min). */
+export interface PendingCheckInTx {
+  txHash: `0x${string}`;
+  nonce: string;
+}
+
 export class CheckInFlowError extends Error {
   constructor(
     message: string,
@@ -35,8 +51,16 @@ export class CheckInFlowError extends Error {
       | "challenge_failed"
       | "already_checked_in"
       | "wallet_conflict"
+      | "rate_limited"
       | "verify_failed"
-      | "verify_timeout"
+      | "verify_timeout",
+    /**
+     * Presente em verify_timeout: a tx JÁ FOI broadcastada. O chamador DEVE
+     * retomar com pollCheckInVerification(pendingTx) em vez de começar um
+     * fluxo novo — challenge novo geraria uma segunda tx que o contrato
+     * reverte (AlreadyCheckedInToday) enquanto a primeira fica órfã.
+     */
+    public readonly pendingTx?: PendingCheckInTx
   ) {
     super(message);
     this.name = "CheckInFlowError";
@@ -44,9 +68,11 @@ export class CheckInFlowError extends Error {
 }
 
 /**
- * Pede o nonce single-use para esta wallet. 429 = já fez check-in hoje
- * (o servidor recusa emitir challenge de revert garantido); 409 = wallet
- * pertence a outro perfil.
+ * Pede o nonce single-use para esta wallet. O 429 é ambíguo no protocolo
+ * (rate limiter E "já fez check-in hoje" usam o mesmo status) — desambigua
+ * pelo `code` do body; sem code, assume rate limit (transiente, retryable),
+ * NUNCA already_checked_in: marcar check-in feito por engano esconde o card
+ * o resto da sessão.
  */
 export async function requestCheckInChallenge(
   authedFetch: AuthedFetch,
@@ -59,7 +85,19 @@ export async function requestCheckInChallenge(
   });
 
   if (res.status === 429) {
-    throw new CheckInFlowError("Already checked in today", "already_checked_in");
+    const body = (await res.json().catch(() => null)) as {
+      code?: string;
+    } | null;
+    if (body?.code === "already_checked_in") {
+      throw new CheckInFlowError(
+        "Already checked in today",
+        "already_checked_in"
+      );
+    }
+    throw new CheckInFlowError(
+      "Too many requests — wait a moment",
+      "rate_limited"
+    );
   }
   if (res.status === 409) {
     throw new CheckInFlowError(
@@ -74,17 +112,30 @@ export async function requestCheckInChallenge(
   return (await res.json()) as CheckInChallenge;
 }
 
-const VERIFY_MAX_ATTEMPTS = 20; // ~40s com retryAfterMs=2000 — sobra p/ 2 confirmações em blocos de ~1s
-const VERIFY_DEFAULT_RETRY_MS = 2000;
+// Backoff: 2s→8s (cap), ~70s de janela total. Rate limit (429) no meio do
+// polling também só espera e continua — a tx está on-chain, desistir cedo
+// é o único jeito de perder.
+const VERIFY_MAX_ATTEMPTS = 15;
+const VERIFY_BASE_RETRY_MS = 2000;
+const VERIFY_MAX_RETRY_MS = 8000;
+
+function verifyRetryDelay(attempt: number, serverHintMs?: number): number {
+  const backoff = Math.min(
+    VERIFY_BASE_RETRY_MS * 1.35 ** attempt,
+    VERIFY_MAX_RETRY_MS
+  );
+  return Math.max(serverHintMs ?? 0, Math.round(backoff));
+}
 
 /**
  * Polling do /verify até o servidor confirmar a tx (202 = receipt ainda não
- * visível ou < 2 confirmações). O nonce só é consumido no sucesso, então
- * repetir a chamada é seguro.
+ * visível ou < 2 confirmações; 429 = rate limit, espera e segue). O nonce só
+ * é consumido no sucesso, então repetir a chamada é seguro — inclusive numa
+ * retomada posterior com o MESMO txHash/nonce (ver PendingCheckInTx).
  */
-export async function verifyCheckInTx(
+export async function pollCheckInVerification(
   authedFetch: AuthedFetch,
-  params: { txHash: `0x${string}`; nonce: string },
+  pendingTx: PendingCheckInTx,
   sleep: (ms: number) => Promise<void> = (ms) =>
     new Promise((resolve) => setTimeout(resolve, ms))
 ): Promise<CheckInSuccess> {
@@ -92,14 +143,14 @@ export async function verifyCheckInTx(
     const res = await authedFetch("/api/celo/check-in/verify", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(params),
+      body: JSON.stringify(pendingTx),
     });
 
-    if (res.status === 202) {
+    if (res.status === 202 || res.status === 429) {
       const body = (await res.json().catch(() => null)) as {
         retryAfterMs?: number;
       } | null;
-      await sleep(body?.retryAfterMs ?? VERIFY_DEFAULT_RETRY_MS);
+      await sleep(verifyRetryDelay(attempt, body?.retryAfterMs));
       continue;
     }
 
@@ -127,10 +178,11 @@ export async function verifyCheckInTx(
   }
 
   // Tx broadcastada mas não confirmada dentro da janela: NÃO é falha
-  // definitiva — o nonce vive 30 min e o usuário pode tentar de novo.
+  // definitiva — carrega o pendingTx para o chamador retomar o polling.
   throw new CheckInFlowError(
     "Transaction not confirmed yet — try again in a moment",
-    "verify_timeout"
+    "verify_timeout",
+    pendingTx
   );
 }
 
@@ -138,6 +190,10 @@ export async function verifyCheckInTx(
  * Fluxo completo: challenge → envia tx (função do chamador) → verify.
  * `sendTx` recebe o challenge e devolve o txHash — MiniPay usa o provider
  * injetado cru, desktop usa thirdweb; ninguém mais conhece essa diferença.
+ *
+ * verify_timeout carrega o pendingTx: o chamador deve guardá-lo e retomar
+ * com pollCheckInVerification — nunca chamar performCheckIn de novo com uma
+ * tx pendente (segunda tx do dia reverte no contrato).
  */
 export async function performCheckIn(
   authedFetch: AuthedFetch,
@@ -146,5 +202,8 @@ export async function performCheckIn(
 ): Promise<CheckInSuccess> {
   const challenge = await requestCheckInChallenge(authedFetch, walletAddress);
   const txHash = await sendTx(challenge);
-  return verifyCheckInTx(authedFetch, { txHash, nonce: challenge.nonce });
+  return pollCheckInVerification(authedFetch, {
+    txHash,
+    nonce: challenge.nonce,
+  });
 }

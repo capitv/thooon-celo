@@ -1,7 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { motion, useReducedMotion } from "framer-motion";
+import { useCallback, useEffect, useState } from "react";
 import {
   useActiveAccount,
   useConnectModal,
@@ -14,36 +13,18 @@ import { fetchWithAuthRetry } from "@/lib/auth/fetchWithAuthRetry";
 import { thirdwebClient } from "@/lib/thirdweb";
 import { celo } from "@/lib/thirdweb/chains";
 import { isMiniPayEnv } from "@/lib/minipay";
+import CheckInCardShell from "@/components/celo/CheckInCardShell";
 import {
   performCheckIn,
+  pollCheckInVerification,
   CheckInFlowError,
   type CheckInChallenge,
+  type CheckInStatusResponse,
+  type CheckInSuccess,
+  type PendingCheckInTx,
 } from "@/lib/celo/checkinFlow";
 import { requestGasDrop, GasDropError } from "@/lib/celo/gasDropClient";
 import { GAS_DROP_RECIPIENT_MAX_BALANCE_WEI } from "@/lib/celo/gasDropConfig";
-
-type CheckInStatus = {
-  enabled: boolean;
-  linkedWallet: string | null;
-  checkedInToday: boolean;
-  currentStreak: number;
-  nextReward: number;
-  contractAddress: string | null;
-};
-
-const CONFETTI_PALETTE = ["#ffd966", "#fff6e0", "#f59e0b", "#fde68a", "#34d399"];
-
-function makeConfetti(count: number) {
-  return Array.from({ length: count }).map((_, i) => ({
-    id: i,
-    color: CONFETTI_PALETTE[i % CONFETTI_PALETTE.length],
-    xDrift: (Math.random() - 0.5) * 280,
-    yRise: -(120 + Math.random() * 160),
-    rotateEnd: (Math.random() - 0.5) * 720,
-    delay: Math.random() * 0.15,
-    size: 3 + Math.random() * 3,
-  }));
-}
 
 function shortAddress(addr: string): string {
   return `${addr.slice(0, 6)}…${addr.slice(-4)}`;
@@ -54,15 +35,49 @@ async function fetchCeloBalance(address: string): Promise<bigint> {
   return eth_getBalance(rpc, { address: address as `0x${string}` });
 }
 
-/** Espera o drop aparecer no saldo (blocos de ~1s; desiste em ~20s). */
+/** Espera o drop aparecer no saldo (backoff 2s→6s, ~40s; retorna o último lido). */
 async function waitForGas(address: string): Promise<bigint> {
-  for (let attempt = 0; attempt < 10; attempt++) {
-    const balance = await fetchCeloBalance(address);
+  let balance = 0n;
+  for (let attempt = 0; attempt < 9; attempt++) {
+    balance = await fetchCeloBalance(address);
     if (balance >= GAS_DROP_RECIPIENT_MAX_BALANCE_WEI) return balance;
-    await new Promise((resolve) => setTimeout(resolve, 2000));
+    await new Promise((resolve) =>
+      setTimeout(resolve, Math.min(2000 * 1.3 ** attempt, 6000))
+    );
   }
-  return fetchCeloBalance(address);
+  return balance;
 }
+
+/**
+ * Tx pendente persistida por wallet+dia UTC: sobrevive a reload dentro do
+ * TTL do nonce (30 min), para a retomada do verify nunca virar uma segunda
+ * tx do dia (que o contrato reverte).
+ */
+const PENDING_TX_KEY_PREFIX = "celo-checkin:pending:";
+
+function pendingTxKey(address: string): string {
+  return `${PENDING_TX_KEY_PREFIX}${address.toLowerCase()}:${new Date().toISOString().slice(0, 10)}`;
+}
+
+function loadPendingTx(address: string): PendingCheckInTx | null {
+  try {
+    const raw = localStorage.getItem(pendingTxKey(address));
+    return raw ? (JSON.parse(raw) as PendingCheckInTx) : null;
+  } catch {
+    return null;
+  }
+}
+
+function savePendingTx(address: string, tx: PendingCheckInTx | null): void {
+  try {
+    if (tx) localStorage.setItem(pendingTxKey(address), JSON.stringify(tx));
+    else localStorage.removeItem(pendingTxKey(address));
+  } catch {
+    // localStorage bloqueado — retomada só não sobrevive a reload
+  }
+}
+
+type CardMode = "connect" | "mismatch" | "getGas" | "checkIn" | "resume";
 
 /**
  * Card de check-in diário on-chain (Celo) para o jogo DESKTOP/browser —
@@ -81,22 +96,26 @@ export default function CeloCheckInCardDesktop() {
   const { connect } = useConnectModal();
   const { mutateAsync: sendTransaction } = useSendTransaction();
   const { isAuthenticated, session } = useAuth();
-  const reduceMotion = useReducedMotion();
 
-  const [status, setStatus] = useState<CheckInStatus | null>(null);
-  const [balanceWei, setBalanceWei] = useState<bigint | null>(null);
+  const [status, setStatus] = useState<CheckInStatusResponse | null>(null);
+  // null = desconhecido (carregando ou RPC falhou). Desconhecido NÃO esconde
+  // o gas drop pra sempre: erro de saldo insuficiente no envio rebaixa pra
+  // false e o botão "Get gas" aparece (recuperação sem depender do RPC).
+  const [hasEnoughGas, setHasEnoughGas] = useState<boolean | null>(null);
+  const [pendingTx, setPendingTx] = useState<PendingCheckInTx | null>(null);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [celebrating, setCelebrating] = useState(false);
   const [justClaimed, setJustClaimed] = useState(false);
   const [dismissed, setDismissed] = useState(false);
-  // Drop negado/esgotado: não reoferecer o botão nesta sessão
-  const [gasDropUnavailable, setGasDropUnavailable] = useState(false);
+  // Drop definitivamente indisponível (inelegível/já recebido) — transientes
+  // (cap diário, 5xx) NÃO travam: só mostram mensagem e permitem retry.
+  const [gasDropBlocked, setGasDropBlocked] = useState(false);
   // Evita null-check de window no render (SSR): só true pós-mount fora do MiniPay
   const [isDesktopEnv, setIsDesktopEnv] = useState(false);
 
-  const confetti = useMemo(() => makeConfetti(20), []);
   const accessToken = session?.access_token ?? null;
+  const address = account?.address ?? null;
 
   useEffect(() => {
     setIsDesktopEnv(!isMiniPayEnv());
@@ -108,13 +127,15 @@ export default function CeloCheckInCardDesktop() {
     [accessToken]
   );
 
+  // Status por usuário + wallet: refaz quando a wallet conecta/troca, para
+  // o guard de mismatch enxergar o linkedWallet mais fresco antes da tx.
   useEffect(() => {
     if (!isDesktopEnv || !isAuthenticated || !accessToken) return;
     let cancelled = false;
     authedFetch("/api/celo/check-in/status", { method: "GET" })
       .then(async (res) => {
         if (!res.ok) return null; // 404 = feature off
-        return (await res.json()) as CheckInStatus;
+        return (await res.json()) as CheckInStatusResponse;
       })
       .then((data) => {
         if (!cancelled && data?.enabled) setStatus(data);
@@ -123,28 +144,32 @@ export default function CeloCheckInCardDesktop() {
     return () => {
       cancelled = true;
     };
-  }, [isDesktopEnv, isAuthenticated, accessToken, authedFetch]);
+  }, [isDesktopEnv, isAuthenticated, accessToken, authedFetch, address]);
 
-  // Saldo de gas da wallet conectada — decide "Check in" vs "Get gas".
+  // Saldo de gas + tx pendente da wallet conectada. Dep é o ADDRESS (string
+  // estável), não o objeto account — thirdweb re-emite referências novas.
   useEffect(() => {
-    if (!isDesktopEnv || !account) {
-      setBalanceWei(null);
+    if (!isDesktopEnv || !address) {
+      setHasEnoughGas(null);
+      setPendingTx(null);
       return;
     }
+    setPendingTx(loadPendingTx(address));
     let cancelled = false;
-    fetchCeloBalance(account.address)
+    fetchCeloBalance(address)
       .then((balance) => {
-        if (!cancelled) setBalanceWei(balance);
+        if (!cancelled)
+          setHasEnoughGas(balance >= GAS_DROP_RECIPIENT_MAX_BALANCE_WEI);
       })
       .catch(() => {
-        // RPC falhou: assume que tem gas — pior caso a wallet mostra
-        // "saldo insuficiente", melhor que esconder o check-in.
-        if (!cancelled) setBalanceWei(GAS_DROP_RECIPIENT_MAX_BALANCE_WEI);
+        // RPC falhou: desconhecido. Mostra check-in (não bloqueia a feature);
+        // se a wallet acusar saldo insuficiente, o handler rebaixa pra false.
+        if (!cancelled) setHasEnoughGas(null);
       });
     return () => {
       cancelled = true;
     };
-  }, [isDesktopEnv, account]);
+  }, [isDesktopEnv, address]);
 
   const celebrate = useCallback(() => {
     setCelebrating(true);
@@ -152,6 +177,26 @@ export default function CeloCheckInCardDesktop() {
     window.setTimeout(() => setCelebrating(false), 1800);
     window.setTimeout(() => setDismissed(true), 2600);
   }, []);
+
+  const applySuccess = useCallback(
+    (result: CheckInSuccess, wallet: string) => {
+      savePendingTx(wallet, null);
+      setPendingTx(null);
+      setStatus((prev) =>
+        prev
+          ? {
+              ...prev,
+              checkedInToday: true,
+              currentStreak: result.streak,
+              linkedWallet: wallet,
+            }
+          : prev
+      );
+      setMessage(`+${result.goldAwarded} gold!`);
+      celebrate();
+    },
+    [celebrate]
+  );
 
   /** Envia checkIn(nonce) pela wallet thirdweb; o hook troca a chain sozinho. */
   const sendViaThirdweb = useCallback(
@@ -181,23 +226,39 @@ export default function CeloCheckInCardDesktop() {
   }, [connect]);
 
   const handleGetGas = useCallback(async () => {
-    if (busy || !account) return;
+    if (busy || !address) return;
     setBusy(true);
     setMessage(null);
     try {
-      await requestGasDrop(authedFetch, account.address);
+      await requestGasDrop(authedFetch, address);
       setMessage("Gas on the way...");
-      const balance = await waitForGas(account.address);
-      setBalanceWei(balance);
+      const balance = await waitForGas(address);
+      setHasEnoughGas(balance >= GAS_DROP_RECIPIENT_MAX_BALANCE_WEI);
       setMessage(null);
     } catch (error) {
       if (error instanceof GasDropError) {
         if (error.code === "balance_sufficient") {
           // Servidor viu saldo que o card não viu — resincroniza.
-          setBalanceWei(GAS_DROP_RECIPIENT_MAX_BALANCE_WEI);
+          setHasEnoughGas(true);
           setMessage(null);
+        } else if (error.code === "already_received") {
+          // Drop pode ter saído segundos atrás (double-click, timeout do
+          // waitForGas anterior) — espera o saldo antes de desistir.
+          setMessage("Gas on the way...");
+          const balance = await waitForGas(address).catch(() => 0n);
+          const funded = balance >= GAS_DROP_RECIPIENT_MAX_BALANCE_WEI;
+          setHasEnoughGas(funded);
+          if (!funded) {
+            setGasDropBlocked(true);
+            setMessage(error.message);
+          } else {
+            setMessage(null);
+          }
+        } else if (error.code === "not_eligible") {
+          setGasDropBlocked(true);
+          setMessage(error.message);
         } else {
-          setGasDropUnavailable(true);
+          // daily_cap / drop_failed: transiente — mensagem, botão continua.
           setMessage(error.message);
         }
       } else {
@@ -205,39 +266,38 @@ export default function CeloCheckInCardDesktop() {
       }
     }
     setBusy(false);
-  }, [busy, account, authedFetch]);
+  }, [busy, address, authedFetch]);
 
   const handleCheckIn = useCallback(async () => {
-    if (busy || !account) return;
+    if (busy || !address) return;
     setBusy(true);
     setMessage(null);
     try {
-      const result = await performCheckIn(
-        authedFetch,
-        account.address,
-        sendViaThirdweb
-      );
-      setStatus((prev) =>
-        prev
-          ? {
-              ...prev,
-              checkedInToday: true,
-              currentStreak: result.streak,
-              linkedWallet: account.address,
-            }
-          : prev
-      );
-      setMessage(`+${result.goldAwarded} gold!`);
-      celebrate();
+      // Tx pendente = retomar o polling do MESMO txHash. Challenge novo aqui
+      // geraria a segunda tx do dia (revert garantido) com a primeira órfã.
+      const result = pendingTx
+        ? await pollCheckInVerification(authedFetch, pendingTx)
+        : await performCheckIn(authedFetch, address, sendViaThirdweb);
+      applySuccess(result, address);
     } catch (error) {
       if (error instanceof CheckInFlowError) {
-        if (error.code === "already_checked_in") {
+        if (error.code === "verify_timeout" && error.pendingTx) {
+          savePendingTx(address, error.pendingTx);
+          setPendingTx(error.pendingTx);
+        } else if (error.code === "already_checked_in") {
+          savePendingTx(address, null);
+          setPendingTx(null);
           setStatus((prev) =>
             prev ? { ...prev, checkedInToday: true } : prev
           );
         }
         setMessage(error.message);
-      } else if (/rejected|denied|cancelled/i.test(String(error))) {
+      } else if (/insufficient|exceeds.*balance|gas required/i.test(String(error))) {
+        // Wallet sem gas que o RPC não detectou (falha/atraso na leitura de
+        // saldo) — oferece o drop em vez do beco sem saída.
+        setHasEnoughGas(false);
+        setMessage(null);
+      } else if (/rejected|denied|cancelled|declined/i.test(String(error))) {
         // usuário cancelou na wallet — sem tx, sem drama
         setMessage(null);
       } else {
@@ -245,7 +305,7 @@ export default function CeloCheckInCardDesktop() {
       }
     }
     setBusy(false);
-  }, [busy, account, authedFetch, sendViaThirdweb, celebrate]);
+  }, [busy, address, pendingTx, authedFetch, sendViaThirdweb, applySuccess]);
 
   if (!isDesktopEnv || !isAuthenticated || !status) return null;
   if (dismissed) return null;
@@ -253,102 +313,76 @@ export default function CeloCheckInCardDesktop() {
 
   // Wallet já vinculada ao perfil e outra conectada: pede a certa em vez de
   // deixar o challenge/verify falhar depois da fee.
-  const walletMismatch =
-    account &&
-    status.linkedWallet &&
-    account.address.toLowerCase() !== status.linkedWallet.toLowerCase();
+  const walletMismatch = Boolean(
+    address &&
+      status.linkedWallet &&
+      address.toLowerCase() !== status.linkedWallet.toLowerCase()
+  );
 
-  const needsGas =
-    !gasDropUnavailable &&
-    balanceWei !== null &&
-    balanceWei < GAS_DROP_RECIPIENT_MAX_BALANCE_WEI;
+  // Estado único dirige subtítulo E botão — nunca divergem.
+  const mode: CardMode = !address
+    ? "connect"
+    : walletMismatch
+      ? "mismatch"
+      : pendingTx
+        ? "resume"
+        : hasEnoughGas === false && !gasDropBlocked
+          ? "getGas"
+          : "checkIn";
 
   const subtitle = status.checkedInToday
     ? `✓ Day ${status.currentStreak} complete`
-    : walletMismatch
+    : mode === "mismatch"
       ? `Connect ${shortAddress(status.linkedWallet!)}`
-      : needsGas
-        ? "Free gas for your first check-in"
-        : `Streak ${status.currentStreak} → +${status.nextReward} gold`;
+      : mode === "resume"
+        ? "Confirming your check-in..."
+        : mode === "getGas"
+          ? "Free gas for your first check-in"
+          : `Streak ${status.currentStreak} → +${status.nextReward} gold`;
+
+  const primaryButtonClass =
+    "shrink-0 rounded-md bg-gradient-to-r from-amber-400 to-amber-500 px-3 py-2 font-pixel text-[10px] uppercase tracking-wider text-black transition-opacity " +
+    (busy ? "opacity-60 cursor-not-allowed" : "hover:opacity-90");
+
+  const action = status.checkedInToday ? null : mode === "connect" ||
+    mode === "mismatch" ? (
+    <button
+      type="button"
+      onClick={handleConnect}
+      className="shrink-0 rounded-md border border-amber-400/70 px-3 py-2 font-pixel text-[10px] uppercase tracking-wider text-amber-300 transition-colors hover:bg-amber-400/10"
+    >
+      Connect
+    </button>
+  ) : mode === "getGas" ? (
+    <button
+      type="button"
+      onClick={handleGetGas}
+      disabled={busy}
+      className={
+        "shrink-0 rounded-md border border-emerald-400/70 px-3 py-2 font-pixel text-[10px] uppercase tracking-wider text-emerald-300 transition-colors " +
+        (busy ? "opacity-60 cursor-not-allowed" : "hover:bg-emerald-400/10")
+      }
+    >
+      {busy ? "..." : "Get gas"}
+    </button>
+  ) : (
+    <button
+      type="button"
+      onClick={handleCheckIn}
+      disabled={busy}
+      className={primaryButtonClass}
+    >
+      {busy ? "..." : mode === "resume" ? "Resume" : "Check in"}
+    </button>
+  );
 
   return (
-    <div className="fixed bottom-4 left-1/2 -translate-x-1/2 z-[9000] w-[min(92vw,340px)] rounded-lg border-2 border-amber-400/60 bg-[#0f0c06]/95 px-4 py-3 shadow-[0_4px_20px_rgba(251,191,36,0.25)] backdrop-blur-sm">
-      {celebrating && !reduceMotion && (
-        <div className="pointer-events-none absolute inset-x-0 bottom-full h-[260px] overflow-visible" aria-hidden>
-          {confetti.map((c) => (
-            <motion.div
-              key={c.id}
-              initial={{ x: 0, y: 0, opacity: 0, rotate: 0 }}
-              animate={{
-                x: c.xDrift,
-                y: c.yRise,
-                opacity: [0, 1, 1, 0],
-                rotate: c.rotateEnd,
-              }}
-              transition={{
-                duration: 1.4,
-                delay: c.delay,
-                times: [0, 0.1, 0.7, 1],
-                ease: "easeOut",
-              }}
-              style={{
-                position: "absolute",
-                left: "50%",
-                bottom: 0,
-                width: c.size,
-                height: c.size * 2,
-                background: c.color,
-                boxShadow: `0 0 ${c.size}px ${c.color}55`,
-              }}
-            />
-          ))}
-        </div>
-      )}
-      <div className="flex items-center justify-between gap-3">
-        <div className="min-w-0">
-          <p className="font-pixel text-[10px] uppercase tracking-widest text-amber-300">
-            Daily Check-in · Celo
-          </p>
-          <p className="mt-0.5 text-[11px] text-amber-100/70 truncate">{subtitle}</p>
-          {message && (
-            <p className="mt-1 text-[11px] text-emerald-300 truncate">{message}</p>
-          )}
-        </div>
-        {!status.checkedInToday &&
-          (!account || walletMismatch ? (
-            <button
-              type="button"
-              onClick={handleConnect}
-              className="shrink-0 rounded-md border border-amber-400/70 px-3 py-2 font-pixel text-[10px] uppercase tracking-wider text-amber-300 transition-colors hover:bg-amber-400/10"
-            >
-              Connect
-            </button>
-          ) : needsGas ? (
-            <button
-              type="button"
-              onClick={handleGetGas}
-              disabled={busy}
-              className={
-                "shrink-0 rounded-md border border-emerald-400/70 px-3 py-2 font-pixel text-[10px] uppercase tracking-wider text-emerald-300 transition-colors " +
-                (busy ? "opacity-60 cursor-not-allowed" : "hover:bg-emerald-400/10")
-              }
-            >
-              {busy ? "..." : "Get gas"}
-            </button>
-          ) : (
-            <button
-              type="button"
-              onClick={handleCheckIn}
-              disabled={busy}
-              className={
-                "shrink-0 rounded-md bg-gradient-to-r from-amber-400 to-amber-500 px-3 py-2 font-pixel text-[10px] uppercase tracking-wider text-black transition-opacity " +
-                (busy ? "opacity-60 cursor-not-allowed" : "hover:opacity-90")
-              }
-            >
-              {busy ? "..." : "Check in"}
-            </button>
-          ))}
-      </div>
-    </div>
+    <CheckInCardShell
+      title="Daily Check-in · Celo"
+      subtitle={subtitle}
+      message={message}
+      celebrating={celebrating}
+      action={action}
+    />
   );
 }

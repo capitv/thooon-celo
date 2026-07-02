@@ -44,13 +44,13 @@ export async function requestGasDrop(
     code?: string;
   } | null;
 
-  const knownCodes = [
-    "not_eligible",
-    "already_received",
-    "balance_sufficient",
-    "daily_cap",
-  ] as const;
-  const code = knownCodes.find((c) => c === body?.code) ?? "drop_failed";
+  const code =
+    body?.code === "not_eligible" ||
+    body?.code === "already_received" ||
+    body?.code === "balance_sufficient" ||
+    body?.code === "daily_cap"
+      ? body.code
+      : "drop_failed";
 
   throw new GasDropError(body?.error ?? "Gas drop failed", code);
 }
